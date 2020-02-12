@@ -30,7 +30,7 @@ argparse.open = open
 
 class BPE(object):
 
-    def __init__(self, codes, merges=-1, separator='@@', vocab=None, glossaries=None):
+    def __init__(self, codes, merges=-1, separator='@@', vocab=None, glossaries=None, glossaries_wholewords=None):
 
         codes.seek(0)
         offset=1
@@ -63,7 +63,14 @@ class BPE(object):
 
         self.glossaries = glossaries if glossaries else []
 
+        if glossaries_wholewords:
+            with open(glossaries_wholewords, 'r') as f:
+                self.glossaries_wholewords = list(filter(None, [ff.strip().split('\t')[0].strip() for ff in f]))
+        else:
+            self.glossaries_wholewords = []
+                
         self.glossaries_regex = re.compile('^({})$'.format('|'.join(glossaries))) if glossaries else None
+        self.glossaries_wholewords_regex = re.compile('^({})$'.format('|'.join(self.glossaries_wholewords))) if self.glossaries_wholewords else None
 
         self.cache = {}
 
@@ -96,16 +103,29 @@ class BPE(object):
             # eliminate double spaces
             if not word:
                 continue
-            new_word = [out for segment in self._isolate_glossaries(word)
-                        for out in encode(segment,
-                                          self.bpe_codes,
-                                          self.bpe_codes_reverse,
-                                          self.vocab,
-                                          self.separator,
-                                          self.version,
-                                          self.cache,
-                                          self.glossaries_regex,
-                                          dropout)]
+            
+            if self.glossaries_wholewords:
+                new_word = [out for out in encode(word,
+                                              self.bpe_codes,
+                                              self.bpe_codes_reverse,
+                                              self.vocab,
+                                              self.separator,
+                                              self.version,
+                                              self.cache,
+                                              self.glossaries_wholewords_regex,
+                                              dropout)]  
+            
+            else:
+                new_word = [out for segment in self._isolate_glossaries(word)
+                            for out in encode(segment,
+                                              self.bpe_codes,
+                                              self.bpe_codes_reverse,
+                                              self.vocab,
+                                              self.separator,
+                                              self.version,
+                                              self.cache,
+                                              self.glossaries_regex,
+                                              dropout)]
 
             for item in new_word[:-1]:
                 output.append(item + self.separator)
@@ -169,7 +189,8 @@ def create_parser(subparsers=None):
         help="Glossaries. Words matching any of the words/regex provided in glossaries will not be affected "+
              "by the BPE (i.e. they will neither be broken into subwords, nor concatenated with other subwords. "+
              "Can be provided as a list of words/regex after the --glossaries argument. Enclose each regex in quotes.")
-
+    parser.add_argument('--glossaries-wholewords',  metavar="PATH", type=str, default=None,
+                        help="Similar to glossaries, file of list of (word, frequency) pairs, but only leaves whole matching words untouched ( stil applies BPE to if they appear as substrings). Can't use both --glossaries and --glossaries-wholewords")
     return parser
 
 def encode(orig, bpe_codes, bpe_codes_reverse, vocab, separator, version, cache, glossaries_regex=None, dropout=0):
@@ -180,6 +201,7 @@ def encode(orig, bpe_codes, bpe_codes_reverse, vocab, separator, version, cache,
         return cache[orig]
 
     if glossaries_regex and glossaries_regex.match(orig):
+        #print("skipping {} ".format(orig), file=sys.stderr)
         cache[orig] = (orig,)
         return (orig,)
 
@@ -361,7 +383,7 @@ if __name__ == '__main__':
             args.glossaries = [g.decode('UTF-8') for g in args.glossaries]
 
 
-    bpe = BPE(args.codes, args.merges, args.separator, vocabulary, args.glossaries)
+    bpe = BPE(args.codes, args.merges, args.separator, vocabulary, args.glossaries,  args.glossaries_wholewords)
 
     for line in args.input:
         args.output.write(bpe.process_line(line, args.dropout))
